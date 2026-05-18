@@ -1,0 +1,10 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+
+[rpc_endpoints]
+# Set ETH_RPC_URL in your environment, or replace with your Alchemy/Infura URL directly.
+mainnet = "${ETH_RPC_URL}"
