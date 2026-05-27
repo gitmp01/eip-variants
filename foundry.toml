@@ -4,7 +4,7 @@ out = "out"
 libs = ["lib"]
 remappings = [
   "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
-  "account-abstraction/=/home/mauro/w/account-abstraction/contracts/"
+  "account-abstraction/=/home/mauro/w/account-abstraction/contracts/",
 ]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
@@ -13,3 +13,4 @@ remappings = [
 # Set ETH_RPC_URL in your environment, or replace with your Alchemy/Infura URL directly.
 mainnet = "https://late-dimensional-patron.quiknode.pro/53b37fface8cb5ae4a38c099cf2507684fdfdbfe"
 base = "https://late-dimensional-patron.base-mainnet.quiknode.pro/53b37fface8cb5ae4a38c099cf2507684fdfdbfe"
+base_sepolia = "https://late-dimensional-patron.base-sepolia.quiknode.pro/53b37fface8cb5ae4a38c099cf2507684fdfdbfe"

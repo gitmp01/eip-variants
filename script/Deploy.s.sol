@@ -10,14 +10,14 @@ contract Deploy is Script {
     function run() external {
         vm.startBroadcast();
 
-        // Spender spender = new Spender();
-        PermittedSpender permittedSpender = new PermittedSpender();
-        Recipient recipient = new Recipient();
+        Spender spender = new Spender();
+        // PermittedSpender permittedSpender = new PermittedSpender();
+        // Recipient recipient = new Recipient();
 
         vm.stopBroadcast();
 
-        // console.log("Spender         deployed at:", address(spender));
-        console.log("PermittedSpender deployed at:", address(permittedSpender));
-        console.log("Recipient        deployed at:", address(recipient));
+        console.log("Spender         deployed at:", address(spender));
+        // console.log("PermittedSpender deployed at:", address(permittedSpender));
+        // console.log("Recipient        deployed at:", address(recipient));
     }
 }
