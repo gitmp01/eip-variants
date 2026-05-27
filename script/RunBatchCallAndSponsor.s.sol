@@ -20,7 +20,7 @@ interface IERC20Minimal {
 ///   2. The call batch — authorises the specific calls the sponsor will submit.
 ///
 /// The sponsor broadcasts a single type-4 tx that carries the delegation and calls
-/// execute(calls, signature) on the EOA. No ETH is spent by the EOA.
+/// execute(calls, nonce, signature) on the EOA. No ETH is spent by the EOA.
 ///
 /// Required env vars:
 ///   EOA_PRIVATE_KEY              — account that holds USDC and signs
@@ -40,7 +40,9 @@ contract RunBatchCallAndSponsor is Script {
     function run() external {
         uint256 eoaKey = vm.envUint("EOA_PRIVATE_KEY");
         uint256 sponsorKey = vm.envUint("SPONSOR_PRIVATE_KEY");
-        address delegate = vm.envAddress("BATCH_CALL_AND_SPONSOR_ADDR");
+        address delegate = address(
+            0x188aDb39Fe306a4a6748712894D652Fe791ea428 // on base
+        );
 
         address eoa = vm.addr(eoaKey);
 
@@ -77,9 +79,10 @@ contract RunBatchCallAndSponsor is Script {
 
         // Step 3: EOA signs the batch message so BatchCallAndSponsor.execute() can verify it.
         //
-        // The contract's replay-protection nonce lives in the EOA's storage slot 0.
-        // We read it directly — it's 0 on first use, and increments with each execute() call.
-        uint256 contractNonce = uint256(vm.load(eoa, bytes32(0)));
+        // Nonce is a free value chosen by the caller. The bitmap uses (nonce >> 8) as the word
+        // index and uint8(nonce) as the bit position. We use nonce=0 (word 0, bit 0) here.
+        // Change this value to submit parallel/out-of-order batches.
+        uint256 batchNonce = 13;
 
         // Replicate the digest the contract will verify against (see BatchCallAndSponsor.execute).
         bytes memory encodedCalls;
@@ -91,9 +94,7 @@ contract RunBatchCallAndSponsor is Script {
                 calls[i].data
             );
         }
-        bytes32 digest = keccak256(
-            abi.encodePacked(contractNonce, encodedCalls)
-        );
+        bytes32 digest = keccak256(abi.encodePacked(batchNonce, encodedCalls));
         bytes32 ethSignedMessageHash = MessageHashUtils.toEthSignedMessageHash(
             digest
         );
@@ -106,7 +107,7 @@ contract RunBatchCallAndSponsor is Script {
         // execute() on it routes to the delegated implementation.
         vm.startBroadcast(sponsorKey);
         vm.attachDelegation(signedDelegation);
-        BatchCallAndSponsor(payable(eoa)).execute(calls, signature);
+        BatchCallAndSponsor(payable(eoa)).execute(calls, batchNonce, signature);
         vm.stopBroadcast();
     }
 }

@@ -32,7 +32,7 @@ contract ComputeERC4337Account is Script {
     function run() external view {
         uint256 ownerKey = vm.envUint("EOA_PRIVATE_KEY");
         address owner = vm.addr(ownerKey);
-        uint256 salt = vm.envOr("SALT", uint256(1));
+        uint256 salt = vm.envOr("SALT", uint256(5));
 
         address sa = FACTORY.getAddress(owner, salt);
 

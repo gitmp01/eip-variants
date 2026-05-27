@@ -17,13 +17,15 @@ import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
  * 1. With a signature: Any sponsor can submit the batch if it carries a valid signature.
  * 2. Directly by the smart account: When the account itself (i.e. address(this)) calls the function, no signature is required.
  *
- * Replay protection is achieved by using a nonce that is included in the signed message.
+ * Replay protection uses a bitmap of used nonces. Each nonce is a uint256 where the upper 248 bits
+ * select a storage word and the lower 8 bits select a bit within that word. This allows unordered,
+ * parallel execution — any nonce can be used or invalidated independently.
  */
 contract BatchCallAndSponsor {
     using ECDSA for bytes32;
 
-    /// @notice A nonce used for replay protection.
-    uint256 public nonce;
+    /// @notice Bitmap of used nonces. Key is word index (nonce >> 8), value is a 256-bit mask.
+    mapping(uint248 => uint256) public nonceBitmap;
 
     /// @notice Represents a single call within a batch.
     struct Call {
@@ -31,6 +33,8 @@ contract BatchCallAndSponsor {
         uint256 value;
         bytes data;
     }
+
+    error NonceAlreadyUsed(uint256 nonce);
 
     /// @notice Emitted for every individual call executed.
     event CallExecuted(address indexed sender, address indexed to, uint256 value, bytes data);
@@ -40,26 +44,27 @@ contract BatchCallAndSponsor {
     /**
      * @notice Executes a batch of calls using an off–chain signature.
      * @param calls An array of Call structs containing destination, ETH value, and calldata.
-     * @param signature The ECDSA signature over the current nonce and the call data.
+     * @param nonce A unique value used for replay protection. Upper 248 bits = word index, lower 8 bits = bit position.
+     * @param signature The ECDSA signature over the provided nonce and the call data.
      *
      * The signature must be produced off–chain by signing:
      * The signing key should be the account’s key (which becomes the smart account’s own identity after upgrade).
      */
-    function execute(Call[] calldata calls, bytes calldata signature) external payable {
+    function execute(Call[] calldata calls, uint256 nonce, bytes calldata signature) external payable {
+        _useNonce(nonce);
+
         // Compute the digest that the account was expected to sign.
         bytes memory encodedCalls;
         for (uint256 i = 0; i < calls.length; i++) {
             encodedCalls = abi.encodePacked(encodedCalls, calls[i].to, calls[i].value, calls[i].data);
         }
         bytes32 digest = keccak256(abi.encodePacked(nonce, encodedCalls));
-        
         bytes32 ethSignedMessageHash = MessageHashUtils.toEthSignedMessageHash(digest);
 
-        // Recover the signer from the provided signature.
         address recovered = ECDSA.recover(ethSignedMessageHash, signature);
         require(recovered == address(this), "Invalid signature");
 
-        _executeBatch(calls);
+        _executeBatch(nonce, calls);
     }
 
     /**
@@ -70,22 +75,33 @@ contract BatchCallAndSponsor {
      */
     function execute(Call[] calldata calls) external payable {
         require(msg.sender == address(this), "Invalid authority");
-        _executeBatch(calls);
+        for (uint256 i = 0; i < calls.length; i++) {
+            _executeCall(calls[i]);
+        }
+        emit BatchExecuted(0, calls);
     }
 
     /**
-     * @dev Internal function that handles batch execution and nonce incrementation.
+     * @dev Marks a nonce as used. Reverts if it was already used.
+     */
+    function _useNonce(uint256 nonce) internal {
+        uint248 word = uint248(nonce >> 8);
+        uint256 mask = uint256(1) << uint8(nonce);
+        if (nonceBitmap[word] & mask != 0) revert NonceAlreadyUsed(nonce);
+        nonceBitmap[word] |= mask;
+    }
+
+    /**
+     * @dev Internal function that handles batch execution.
+     * @param nonce The nonce used for this batch (already consumed before this call).
      * @param calls An array of Call structs.
      */
-    function _executeBatch(Call[] calldata calls) internal {
-        uint256 currentNonce = nonce;
-        nonce++; // Increment nonce to protect against replay attacks
-
+    function _executeBatch(uint256 nonce, Call[] calldata calls) internal {
         for (uint256 i = 0; i < calls.length; i++) {
             _executeCall(calls[i]);
         }
 
-        emit BatchExecuted(currentNonce, calls);
+        emit BatchExecuted(nonce, calls);
     }
 
     /**

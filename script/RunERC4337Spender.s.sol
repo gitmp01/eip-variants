@@ -26,18 +26,16 @@ interface ISimpleAccountFactory {
 }
 
 /// @notice Deploys a SimpleAccount via ERC-4337 on first run (using initCode) then executes
-///         an atomic approve + pull batch through EntryPoint.handleOps().
+///         two separate handleOps transactions with non-sequential nonces:
+///           tx1: nonce key 2002, seq 0  →  raw nonce (2002 << 64) | 0
+///           tx2: nonce key 1001, seq 0  →  raw nonce (1001 << 64) | 0
+///         Both ops perform the same approve + pull batch. Using distinct keys means the
+///         EntryPoint treats them as independent nonce sequences, so order doesn't matter.
 ///
 /// Flow:
 ///   1. The sponsor pre-funds the SA's EntryPoint deposit so the SA can pay for gas.
-///   2. The EOA (owner) signs a UserOperation containing:
-///        - initCode: deploys the SA on first execution (ignored if already deployed)
-///        - callData: executeBatch([approve(SPENDER, AMOUNT), spender.pull(USDC, sa, AMOUNT)])
-///   3. The sponsor calls EntryPoint.handleOps(), which:
-///        a. Creates the SA if initCode is present and SA is not yet deployed.
-///        b. Validates the UserOp signature against the SA owner.
-///        c. Executes the batch: approve then pull.
-///        d. Deducts gas from the SA's deposit and refunds the sponsor (beneficiary).
+///   2. The EOA (owner) signs two UserOperations (different nonce keys, same callData).
+///   3. The sponsor calls EntryPoint.handleOps() twice (one op each), in order: key 2002 first.
 ///
 /// Factory source:
 ///   https://github.com/eth-infinitism/account-abstraction/blob/develop/contracts/accounts/SimpleAccountFactory.sol
@@ -92,7 +90,7 @@ contract RunERC4337Spender is Script {
     function run() external {
         uint256 ownerKey = vm.envUint("EOA_PRIVATE_KEY");
         uint256 sponsorKey = vm.envUint("SPONSOR_PRIVATE_KEY");
-        uint256 salt = vm.envOr("SALT", uint256(1));
+        uint256 salt = vm.envOr("SALT", uint256(5));
 
         address owner = vm.addr(ownerKey);
         address sponsor = vm.addr(sponsorKey);
@@ -120,20 +118,41 @@ contract RunERC4337Spender is Script {
         }
         vm.stopBroadcast();
 
-        // --- Steps 2-5: build UserOp, sign, and submit via handleOps -----------------
-        PackedUserOperation memory userOp = _buildUserOp(
+        // --- Steps 2-5: build two UserOps (different nonce keys) and submit separately --
+        // Nonce key 2002, seq 0 → raw nonce (2002 << 64) | 0. Submitted first.
+        // Only the first op carries initCode; the SA is deployed after that handleOps returns.
+        PackedUserOperation memory userOp1 = _buildUserOp(
             ownerKey,
             sa,
             owner,
-            salt
+            salt,
+            2002,
+            sa.code.length == 0
         );
 
-        PackedUserOperation[] memory ops = new PackedUserOperation[](1);
-        ops[0] = userOp;
+        // Nonce key 1001, seq 0 → raw nonce (1001 << 64) | 0. Submitted last.
+        PackedUserOperation memory userOp2 = _buildUserOp(
+            ownerKey,
+            sa,
+            owner,
+            salt,
+            1001,
+            false
+        );
+
+        PackedUserOperation[] memory ops1 = new PackedUserOperation[](1);
+        ops1[0] = userOp1;
+
+        PackedUserOperation[] memory ops2 = new PackedUserOperation[](1);
+        ops2[0] = userOp2;
 
         vm.startBroadcast(sponsorKey);
-        ENTRY_POINT.handleOps(ops, payable(sponsor));
+        ENTRY_POINT.handleOps(ops1, payable(sponsor));
         vm.stopBroadcast();
+
+        // vm.startBroadcast(sponsorKey);
+        // ENTRY_POINT.handleOps(ops2, payable(sponsor));
+        // vm.stopBroadcast();
 
         console.log(
             "Done. Spender USDC balance:",
@@ -142,11 +161,16 @@ contract RunERC4337Spender is Script {
     }
 
     /// @dev Builds and signs the UserOperation for the approve + pull batch.
+    ///      nonceKey selects an independent nonce sequence; raw nonce = (nonceKey << 64) | seq.
+    ///      withInitCode = true only for the first op; subsequent ops must pass false because
+    ///      the SA is already deployed after the first handleOps executes.
     function _buildUserOp(
         uint256 ownerKey,
         address sa,
         address owner,
-        uint256 salt
+        uint256 salt,
+        uint192 nonceKey,
+        bool withInitCode
     ) internal view returns (PackedUserOperation memory userOp) {
         // Build the call batch.
         BaseAccount.Call[] memory calls = new BaseAccount.Call[](2);
@@ -168,8 +192,7 @@ contract RunERC4337Spender is Script {
             data: abi.encodeCall(Spender.pull, (address(USDC), sa, AMOUNT))
         });
 
-        // initCode deploys the SA on first use; EntryPoint ignores it if already deployed.
-        bytes memory initCode = sa.code.length == 0
+        bytes memory initCode = withInitCode
             ? abi.encodePacked(
                 address(FACTORY),
                 abi.encodeCall(
@@ -181,7 +204,7 @@ contract RunERC4337Spender is Script {
 
         userOp = PackedUserOperation({
             sender: sa,
-            nonce: ENTRY_POINT.getNonce(sa, 0),
+            nonce: ENTRY_POINT.getNonce(sa, nonceKey),
             initCode: initCode,
             callData: abi.encodeCall(BaseAccount.executeBatch, (calls)),
             accountGasLimits: _pack(VERIFICATION_GAS_LIMIT, CALL_GAS_LIMIT),
